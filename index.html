@@ -208,41 +208,48 @@
 <div id="toast" role="status"></div>
 
 <script>
-const KEY = 'gharKaMenu.v1';
+/* ---------- Supabase sync (shared family menu) ---------- */
+const SB_URL = 'https://sjkirytdnlgmcbfryqix.supabase.co/rest/v1';
+const SB_KEY = 'sb_publishable_cH4fjvp3W7qc76z3zWChaw_Uyt19RI3';
+const CACHE_KEY = 'gharKaMenu.v2';
 
-const seed = [
-  { name: 'Masala Chawal', type: 'quick' },
-  { name: 'Dal Chawal', type: 'quick' },
-  { name: 'Aaloo Puri', type: 'quick' },
-  { name: 'Aaloo Bhindi + Roti', type: 'quick' },
-  { name: 'Tawa Pulao', type: 'quick' },
-  { name: 'Soyabean Aaloo', type: 'quick' },
-  { name: 'Macaroni / Pasta', type: 'quick' },
-  { name: 'Aaloo Bhujiya', type: 'quick' },
-  { name: 'Kadhai Paneer', type: 'quick' },
-  { name: 'Paneer Bhurji', type: 'quick' },
-  { name: 'Paneer (any sabzi)', type: 'quick' },
-  { name: 'Chhole Bhature', type: 'plan', prep: 'soak chhole overnight' },
-  { name: 'Chhole Chawal', type: 'plan', prep: 'soak chhole overnight' },
-  { name: 'Biryani', type: 'plan', prep: 'marinate + soak rice 1 hr' },
-  { name: 'Chicken Tikka', type: 'plan', prep: 'marinate 2-4 hrs' },
-];
-
-let dishes = load();
+let dishes = loadCache();
 let mode = 'quick';
 let addType = 'quick';
 let suggested = null;
 
-function load() {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) { /* fall through to seed */ }
-  return seed.map((d, i) => ({ id: 'd' + i, log: [], prep: '', ...d }));
+async function sb(path, opts = {}) {
+  const res = await fetch(SB_URL + path, {
+    ...opts,
+    headers: { apikey: SB_KEY, 'Content-Type': 'application/json', ...(opts.headers || {}) }
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.status === 204 ? null : res.json();
 }
-function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(dishes)); }
-  catch (e) { toast('Could not save — storage unavailable'); }
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* no cache yet */ }
+  return [];
+}
+function saveCache() {
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(dishes)); } catch (e) { /* private mode etc. */ }
+}
+
+async function refresh(quiet) {
+  try {
+    const rows = await sb('/dishes?select=id,name,type,prep,cook_log(cooked_on)&order=created_at');
+    dishes = rows.map(r => ({
+      id: r.id, name: r.name, type: r.type, prep: r.prep || '',
+      log: (r.cook_log || []).map(x => x.cooked_on).sort()
+    }));
+    saveCache(); render();
+  } catch (e) {
+    if (!quiet) toast(dishes.length ? 'Offline — showing last synced menu' : 'Could not reach the menu — check internet');
+    render();
+  }
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -312,19 +319,29 @@ function cookSuggested() {
 }
 
 /* ---------- logging ---------- */
-function logToday(id, force) {
+async function logToday(id, force) {
   const d = dishes.find(x => x.id === id);
   if (!d) return;
   const t = today();
   const has = d.log.includes(t);
-  if (has && !force) {
-    d.log = d.log.filter(x => x !== t);   // toggle off = undo
-    toast('Removed today\u2019s entry for ' + d.name);
-  } else if (!has) {
-    d.log.push(t);
-    d.log.sort();
+  if (has && force) return;
+  // optimistic update, revert on sync failure
+  if (has) d.log = d.log.filter(x => x !== t);   // toggle off = undo
+  else { d.log.push(t); d.log.sort(); }
+  saveCache(); render();
+  try {
+    if (has) {
+      await sb('/cook_log?dish_id=eq.' + d.id + '&cooked_on=eq.' + t, { method: 'DELETE' });
+      toast('Removed today\u2019s entry for ' + d.name);
+    } else {
+      await sb('/cook_log', { method: 'POST', body: JSON.stringify({ dish_id: d.id, cooked_on: t }) });
+    }
+  } catch (e) {
+    if (!has && String(e).includes('409')) return; // someone else already logged it \u2014 fine
+    if (has) { d.log.push(t); d.log.sort(); } else { d.log = d.log.filter(x => x !== t); }
+    saveCache(); render();
+    toast('Could not sync \u2014 check internet');
   }
-  save(); render();
 }
 
 /* ---------- add / remove ---------- */
@@ -334,26 +351,36 @@ function pickType(t) {
   document.getElementById('tPlan').classList.toggle('on', t === 'plan');
   document.getElementById('prepWrap').classList.toggle('show', t === 'plan');
 }
-function addDish() {
+async function addDish() {
   const name = document.getElementById('newName').value.trim();
   if (!name) { toast('Give the dish a name first'); return; }
-  dishes.push({
-    id: 'd' + Date.now(),
-    name, type: addType,
-    prep: addType === 'plan' ? document.getElementById('newPrep').value.trim() : '',
-    log: []
-  });
-  document.getElementById('newName').value = '';
-  document.getElementById('newPrep').value = '';
-  save(); render();
-  toast(name + ' added to the menu');
+  const prep = addType === 'plan' ? document.getElementById('newPrep').value.trim() : '';
+  try {
+    const rows = await sb('/dishes', {
+      method: 'POST',
+      body: JSON.stringify({ name, type: addType, prep }),
+      headers: { Prefer: 'return=representation' }
+    });
+    dishes.push({ id: rows[0].id, name: rows[0].name, type: rows[0].type, prep: rows[0].prep || '', log: [] });
+    document.getElementById('newName').value = '';
+    document.getElementById('newPrep').value = '';
+    saveCache(); render();
+    toast(name + ' added to the menu');
+  } catch (e) {
+    toast('Could not add — check internet');
+  }
 }
-function removeDish(id) {
+async function removeDish(id) {
   const d = dishes.find(x => x.id === id);
   if (!d) return;
   if (!confirm('Remove "' + d.name + '" from the menu?')) return;
-  dishes = dishes.filter(x => x.id !== id);
-  save(); render();
+  try {
+    await sb('/dishes?id=eq.' + id, { method: 'DELETE' });
+    dishes = dishes.filter(x => x.id !== id);
+    saveCache(); render();
+  } catch (e) {
+    toast('Could not remove — check internet');
+  }
 }
 
 /* ---------- render ---------- */
@@ -390,7 +417,9 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
 }
 
-render();
+render();          // instant paint from cache
+refresh();         // then sync from Supabase
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
 </script>
 </body>
 </html>
