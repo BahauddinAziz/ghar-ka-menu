@@ -5,7 +5,6 @@ static_sites:
     source_dir: /
     index_document: index.html
     error_document: index.html
-    github:
-      repo: BahauddinAziz/ghar-ka-menu
+    git:
+      repo_clone_url: https://github.com/BahauddinAziz/ghar-ka-menu.git
       branch: main
-      deploy_on_push: true
