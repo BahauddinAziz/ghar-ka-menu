@@ -124,6 +124,18 @@
     font-size: 1.1rem; cursor: pointer; padding: 6px 4px; line-height: 1;
   }
 
+  /* ---------- history / diary ---------- */
+  .diary-row {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 11px 2px; border-bottom: 1px solid var(--line);
+  }
+  .diary-row .date {
+    flex: 0 0 92px; font-size: 0.78rem; font-weight: 700;
+    color: var(--steel); text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .diary-row .date.today { color: var(--mirch); }
+  .diary-row .made { flex: 1; font-weight: 600; font-size: 0.95rem; line-height: 1.45; }
+
   /* ---------- add form ---------- */
   .add { margin-top: 30px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
   .add h3 { font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 1rem; margin-bottom: 10px; }
@@ -188,6 +200,11 @@
   <section class="list">
     <div class="sec-head"><h2>Plan Ahead &#9200;</h2><span>soak / marinate first</span></div>
     <div id="planList"></div>
+  </section>
+
+  <section class="list">
+    <div class="sec-head"><h2>Kitchen Diary &#128214;</h2><span>kis din kya bana</span></div>
+    <div id="historyList"></div>
   </section>
 
   <div class="add">
@@ -401,11 +418,31 @@ function rowHtml(d) {
     '<button class="del" aria-label="Remove dish" onclick="removeDish(\'' + d.id + '\')">&times;</button>' +
   '</div>';
 }
+function dateLabel(iso) {
+  const t = today();
+  if (iso === t) return 'Today';
+  const diff = Math.floor((new Date(t) - new Date(iso)) / 86400000);
+  if (diff === 1) return 'Yesterday';
+  return new Date(iso + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+function historyHtml() {
+  const byDate = {};
+  dishes.forEach(d => d.log.forEach(day => { (byDate[day] = byDate[day] || []).push(d.name); }));
+  const days = Object.keys(byDate).sort().reverse().slice(0, 30);
+  if (!days.length) return '<div class="row"><div class="sub">Nothing logged yet — tap "Bana!" when you cook.</div></div>';
+  return days.map(day =>
+    '<div class="diary-row">' +
+      '<div class="date' + (day === today() ? ' today' : '') + '">' + dateLabel(day) + '</div>' +
+      '<div class="made">' + byDate[day].map(esc).join(', ') + '</div>' +
+    '</div>'
+  ).join('');
+}
 function render() {
   document.getElementById('quickList').innerHTML =
     dishes.filter(d => d.type === 'quick').map(rowHtml).join('') || '<div class="row"><div class="sub">No quick dishes yet — add one below.</div></div>';
   document.getElementById('planList').innerHTML =
     dishes.filter(d => d.type === 'plan').map(rowHtml).join('') || '<div class="row"><div class="sub">No plan-ahead dishes yet — add one below.</div></div>';
+  document.getElementById('historyList').innerHTML = historyHtml();
 }
 
 let toastTimer;
